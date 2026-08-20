@@ -18,7 +18,7 @@ A **UDP**-based, ultra-lightweight application-layer protocol for sending contro
 IDCCP/
 ├── idccp.h       # Protocol header: frame structure, constants, exit codes, function declarations
 ├── idccpd.c      # Server daemon implementation (device side)
-├── idccp.conf    # Sample configuration file
+├── example.conf    # Sample configuration file
 ├── LICENSE       # GNU GPL v3 license
 └── README.md     # This file
 ```
