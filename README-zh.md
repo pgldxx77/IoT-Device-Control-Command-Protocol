@@ -19,7 +19,7 @@
 IDCCP/
 ├── idccp.h       # 协议头文件：帧结构、常量、退出码、函数声明
 ├── idccpd.c      # 服务端守护进程实现（设备端）
-├── idccp.conf    # 示例配置文件
+├── example.conf    # 示例配置文件
 ├── LICENSE       # GNU GPL v3 许可证
 └── README.md     # 本文件
 ```
