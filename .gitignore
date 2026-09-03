@@ -54,3 +54,4 @@ dkms.conf
 # debug information files
 *.dwo
 idccpd
+idccp_cli

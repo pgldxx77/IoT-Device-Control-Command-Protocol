@@ -23,9 +23,14 @@
 #define EXIT_HOLDER_MISSING 10
 #define EXIT_UNSUPPORTED_PAYLOAD_FLAG 11
 #define EXIT_ERROR_IP 12
+#define EXIT_OUT_BOUND_CONF 13
+#define EXIT_OUT_BOUND_PAYLOAD 14
+#define EXIT_REQ_OPEN_FAILED 15
 
 #include<stdint.h>
-#include <stdbool.h>
+#include<stdbool.h>
+#include<netinet/in.h>
+#include<stdio.h>
 
 typedef struct
 {
@@ -50,6 +55,10 @@ typedef struct
     uint16_t port;
     char * configure;
     struct sockaddr_in addr;
+    int sockfd;
+    uint8_t cmdnum;
+    char payload[PAYLOAD_MAX_LEN];
+    uint8_t flag;
 } cfg_t;
 
 int socket_create(cfg_t * cfg);
