@@ -11,6 +11,7 @@ A **UDP**-based, ultra-lightweight application-layer protocol for sending contro
 - **Connectionless**: built on UDP, requiring no handshake or connection maintenance, ideal for IoT scenarios with unstable networks and limited resources.
 - **Configuration-driven**: the mapping from command numbers to concrete actions is entirely defined by the configuration file, so it can be extended without changing code.
 - **Built-in deduplication**: duplicate packets (such as UDP retransmissions) are filtered by request ID and client address, preventing commands from being executed more than once.
+- **Reference client included**: a command-line client (`idccp_cli`) ships with the protocol, so you can send commands and test the server without writing any code.
 
 ## 📦 Directory Structure
 
@@ -18,7 +19,8 @@ A **UDP**-based, ultra-lightweight application-layer protocol for sending contro
 IDCCP/
 ├── idccp.h       # Protocol header: frame structure, constants, exit codes, function declarations
 ├── idccpd.c      # Server daemon implementation (device side)
-├── example.conf    # Sample configuration file
+├── idccp_cli.c   # Command-line client implementation (control side, for testing)
+├── example.conf  # Sample configuration file
 ├── LICENSE       # GNU GPL v3 license
 └── README.md     # This file
 ```
@@ -75,13 +77,17 @@ Every IDCCP packet consists of a **fixed 8-byte header** plus an **optional payl
 
 ### Building
 
-The server is a single-file C program that depends only on the standard library and system calls:
+Both the server and the client are single-file C programs that depend only on the standard library and system calls:
 
 ```bash
+# Server daemon (device side)
 gcc -o idccpd idccpd.c
+
+# Command-line client (control side, for testing)
+gcc -o idccp_cli idccp_cli.c
 ```
 
-> `idccp.h` and `idccpd.c` must be in the same directory.
+> `idccp.h` must be in the same directory as the `.c` files.
 
 ### Configuration
 
@@ -112,11 +118,11 @@ Each `[Command]` rule contains three fields:
 - When `payload_flag=0`, the command is executed **as-is**.
 - When `payload_flag=1`, the command **must** contain the `{payload}` placeholder; the payload content replaces that placeholder before execution.
 
-### Running
+### Running the Server
 
 ```bash
 # Run in the foreground, bound to 0.0.0.0:30052
-./idccpd -c idccp.conf
+./idccpd -c example.conf
 
 # Specify the listen address and port, and run in the background as a daemon
 ./idccpd -a 0.0.0.0 -p 30052 -c /etc/idccp.conf -d
@@ -132,9 +138,23 @@ Command-line options:
 | `-d` | Run in the background as a daemon |
 | `-h` | Show help information |
 
-### Sending a Command Example
+### Sending a Command with the Client
 
-The Python script below demonstrates how to construct a "with-payload" IDCCP packet and send it (corresponding to `cmdnum=0x2` in the sample configuration):
+The simplest way to send a command is to use the bundled `idccp_cli` client:
+
+```bash
+# No-payload command (matches cmdnum=0x1 in the sample configuration)
+./idccp_cli -n 0x1
+
+# With-payload command (matches cmdnum=0x2 in the sample configuration)
+./idccp_cli -n 0x2 -l world
+```
+
+See the **Command-Line Client** section below for the full reference.
+
+### Sending a Command with a Script
+
+For reference, the Python script below demonstrates how to construct a "with-payload" IDCCP packet by hand (corresponding to `cmdnum=0x2` in the sample configuration):
 
 ```python
 import socket
@@ -162,6 +182,56 @@ sock.sendto(frame, (IP, PORT))
 
 The server will execute `/bin/echo "hello world"` and will **not** send back any data.
 
+## 🖥️ Command-Line Client (`idccp_cli`)
+
+`idccp_cli` is a minimal UDP client that builds an IDCCP frame and sends it to a running server. It is intended mainly for testing the protocol and the server daemon.
+
+### Usage
+
+```
+Usage: idccp_cli [options]
+  -a <IP>       Target IP (default: 127.0.0.1)
+  -p <port>     Target port (default: 30052)
+  -n <cmdnum>   Command number (hex or dec)
+  -l <payload>  Payload string (sets flag=1)
+  -h            Show this help
+```
+
+### Options
+
+| Option | Description | Default |
+|:----:|:-----|:-----|
+| `-a <IP>` | Target server IP address | `127.0.0.1` |
+| `-p <port>` | Target server UDP port | `30052` |
+| `-n <cmdnum>` | Command number, `0`–`255` (supports `0x` hexadecimal notation) | `0` |
+| `-l <payload>` | Payload string; when present, the frame is sent with `payload_flag=1` | (absent → `payload_flag=0`) |
+| `-h` | Show help | — |
+
+### Behavior
+
+- **No payload** (`-l` omitted): the client sends a frame with `payload_flag=0` and an empty payload (`length=0`), which must match a `payload_flag=0` rule in the configuration.
+- **With payload** (`-l <string>`): the client sends a frame with `payload_flag=1` and `length=strlen(payload)`, which must match a `payload_flag=1` rule. Quote the string if it contains spaces.
+- **Request ID**: the client keeps a persistent `uint16_t` counter in `/var/lib/idccp.req`. On every run it opens the file (creating it if needed), takes an exclusive `fcntl` file lock, reads and increments the counter, writes it back, and releases the lock. This gives every command a unique `req_id`, even across concurrent invocations, so the server's deduplication never mistakes a new command for a retransmission. The file requires write permission on `/var/lib`.
+- **Triple send**: to tolerate UDP packet loss, the client sends the same frame **three times**. The server's deduplication table guarantees the command still executes only once.
+
+### Examples
+
+```bash
+# No-payload command 0x1 → server runs /bin/echo "hello"
+./idccp_cli -n 0x1
+
+# With-payload command 0x2 → server runs /bin/echo "hello world"
+./idccp_cli -n 0x2 -l world
+
+# Target a remote server
+./idccp_cli -a 192.168.1.10 -p 30052 -n 0x2 -l world
+
+# Decimal command number (equivalent to 0x2)
+./idccp_cli -n 2 -l world
+```
+
+Because the protocol is fire-and-forget, the client prints nothing on success and exits immediately after sending.
+
 ## 🔁 Deduplication
 
 Because UDP may retransmit or deliver duplicates, the server maintains a table of recent request records (default capacity `64`):
@@ -169,6 +239,8 @@ Because UDP may retransmit or deliver duplicates, the server maintains a table o
 - Records the triple `(req_id, client IP, client port)`.
 - On receiving a packet, the table is looked up first; a hit is treated as a duplicate and dropped.
 - When the table is full, it wraps around and overwrites the oldest record (ring-buffer strategy).
+
+This mechanism is also what makes the client's triple-send strategy safe: the three identical frames share the same `req_id`, so only the first one is executed.
 
 ## 🚪 Exit Codes
 
@@ -184,7 +256,10 @@ Because UDP may retransmit or deliver duplicates, the server maintains a table o
 | 9 | `EXIT_LENGTH_ERR` | Invalid payload length |
 | 10 | `EXIT_HOLDER_MISSING` | The configured command is missing the `{payload}` placeholder |
 | 11 | `EXIT_UNSUPPORTED_PAYLOAD_FLAG` | The configured payload flag has an invalid value |
-| 12 | `EXIT_ERROR_IP` | Invalid IP address passed via the `-a` option |
+| 12 | `EXIT_ERROR_IP` | Invalid IP address passed via the `-a` option (server and client) |
+| 13 | `EXIT_OUT_BOUND_CONF` | Configuration value out of bounds (defined, not currently triggered) |
+| 14 | `EXIT_OUT_BOUND_PAYLOAD` | Payload too long (exceeds 255 bytes) in `idccp_cli -l` |
+| 15 | `EXIT_REQ_OPEN_FAILED` | Failed to open/create the request ID file `/var/lib/idccp.req` |
 
 ## ⚠️ Security Considerations
 
@@ -201,6 +276,8 @@ IDCCP is designed to minimize communication overhead and **does not include any 
 - The server executes commands via `fork()` + `exec()`; the parent does not wait for the child (`SIGCHLD` is ignored), thus avoiding blocking the main loop.
 - `req_id` is read and written directly in host byte order (little-endian) without conversion to network byte order; take care when communicating across platforms with different byte orders.
 - Command numbers that are **not found in the configuration table are silently ignored**; no error is sent back (consistent with the no-reply design).
+- The client persists `req_id` in `/var/lib/idccp.req` and protects the increment with an `fcntl` file lock, so concurrent invocations never produce a duplicate request ID.
+- The client sends each frame three times for reliability; the server's ring-buffer deduplication table absorbs the extra copies.
 
 ## 📄 License
 
